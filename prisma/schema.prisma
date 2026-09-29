@@ -1,0 +1,275 @@
+// Схема базы данных сайта аренды квартир.
+// Таблицы и колонки в PostgreSQL — в snake_case, в коде — camelCase.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ───────────────────────────── Enums ─────────────────────────────
+
+enum City {
+  KYIV
+  DNIPRO
+}
+
+enum Currency {
+  UAH
+  USD
+  EUR
+}
+
+enum ApartmentStatus {
+  DRAFT
+  PUBLISHED
+  HIDDEN
+  RENTED
+  ARCHIVED
+}
+
+/// Минимальный срок аренды
+enum RentalPeriod {
+  MONTHS_1
+  MONTHS_3
+  MONTHS_6
+  MONTHS_12
+}
+
+enum UtilitiesPayment {
+  INCLUDED
+  SEPARATE
+}
+
+enum LeadStatus {
+  NEW
+  IN_PROGRESS
+  COMPLETED
+  ARCHIVED
+}
+
+enum Messenger {
+  TELEGRAM
+  VIBER
+  WHATSAPP
+  PHONE
+}
+
+enum UserRole {
+  ADMIN
+}
+
+// ─────────────────────────── Квартиры ────────────────────────────
+
+model Apartment {
+  id              String           @id @default(cuid())
+  /// Стабильный URL-идентификатор. Не меняется автоматически при изменении названия.
+  slug            String           @unique @db.VarChar(160)
+  title           String           @db.VarChar(160)
+  city            City
+  /// Ключ района из конфигурации городов (src/config/cities.ts)
+  district        String           @db.VarChar(64)
+  address         String           @db.VarChar(200)
+  /// Цена в валюте объявления за месяц
+  price           Int
+  currency        Currency         @default(UAH)
+  /// Цена в гривнах по курсу из настроек — для фильтрации и сортировки
+  priceUah        Int              @map("price_uah")
+  rooms           Int              @db.SmallInt
+  /// Площадь, м²
+  area            Float
+  floor           Int              @db.SmallInt
+  totalFloors     Int              @map("total_floors") @db.SmallInt
+  description     String           @db.Text
+  furnished       Boolean          @default(false)
+  hasAppliances   Boolean          @default(false) @map("has_appliances")
+  childrenAllowed Boolean          @default(false) @map("children_allowed")
+  petsAllowed     Boolean          @default(false) @map("pets_allowed")
+  dogsAllowed     Boolean          @default(false) @map("dogs_allowed")
+  catsAllowed     Boolean          @default(false) @map("cats_allowed")
+  rentalPeriod    RentalPeriod     @default(MONTHS_6) @map("rental_period")
+  /// Депозит в валюте объявления: null — по договорённости, 0 — без депозита
+  deposit         Int?
+  utilities       UtilitiesPayment @default(SEPARATE)
+  utilitiesNote   String?          @map("utilities_note") @db.VarChar(200)
+  status          ApartmentStatus  @default(DRAFT)
+  /// Демонстрационный объект (создан seed-скриптом), помечается на сайте
+  isDemo          Boolean          @default(false) @map("is_demo")
+  createdAt       DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
+  publishedAt     DateTime?        @map("published_at") @db.Timestamptz(3)
+
+  images        ApartmentImage[]
+  leads         Lead[]
+  slugRedirects ApartmentSlugRedirect[]
+
+  @@index([status, city, priceUah])
+  @@index([status, publishedAt(sort: Desc)])
+  @@index([status, city, district])
+  @@index([updatedAt(sort: Desc)])
+  @@map("apartments")
+}
+
+model ApartmentImage {
+  id          String    @id @default(cuid())
+  apartmentId String    @map("apartment_id")
+  apartment   Apartment @relation(fields: [apartmentId], references: [id], onDelete: Cascade)
+  /// Публичный URL файла в хранилище
+  url         String    @db.VarChar(500)
+  /// Ключ объекта в хранилище (для удаления)
+  storageKey  String    @unique @map("storage_key") @db.VarChar(300)
+  alt         String?   @db.VarChar(200)
+  width       Int
+  height      Int
+  /// Крошечное превью (data URL) для плавной загрузки
+  blurDataUrl String?   @map("blur_data_url") @db.Text
+  sortOrder   Int       @default(0) @map("sort_order")
+  /// Главное фото (обложка). Всегда первое в галерее.
+  isPrimary   Boolean   @default(false) @map("is_primary")
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([apartmentId, sortOrder])
+  @@map("apartment_images")
+}
+
+/// Старые slug → квартира. Нужны для 301-редиректа, если slug изменили вручную.
+model ApartmentSlugRedirect {
+  slug        String    @id @db.VarChar(160)
+  apartmentId String    @map("apartment_id")
+  apartment   Apartment @relation(fields: [apartmentId], references: [id], onDelete: Cascade)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([apartmentId])
+  @@map("apartment_slug_redirects")
+}
+
+// ──────────────────────────── Заявки ─────────────────────────────
+
+model Lead {
+  id          String     @id @default(cuid())
+  name        String     @db.VarChar(80)
+  phone       String     @db.VarChar(32)
+  messenger   Messenger?
+  message     String?    @db.VarChar(1000)
+  apartmentId String?    @map("apartment_id")
+  apartment   Apartment? @relation(fields: [apartmentId], references: [id], onDelete: SetNull)
+  status      LeadStatus @default(NEW)
+  /// Страница, с которой отправлена заявка
+  source      String?    @db.VarChar(300)
+  /// Момент согласия с политикой конфиденциальности
+  consentAt   DateTime   @map("consent_at") @db.Timestamptz(3)
+  /// HMAC-хеш IP (для защиты от злоупотреблений, без хранения самого IP)
+  ipHash      String?    @map("ip_hash") @db.VarChar(64)
+  isDemo      Boolean    @default(false) @map("is_demo")
+  createdAt   DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime   @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([status, createdAt(sort: Desc)])
+  @@index([createdAt(sort: Desc)])
+  @@map("leads")
+}
+
+// ─────────────────────── Пользователи и сессии ───────────────────
+
+model User {
+  id                String     @id @default(cuid())
+  email             String     @unique @db.VarChar(254)
+  /// Argon2id-хеш. Пароль в открытом виде нигде не хранится.
+  passwordHash      String     @map("password_hash") @db.VarChar(255)
+  name              String?    @db.VarChar(80)
+  role              UserRole   @default(ADMIN)
+  lastLoginAt       DateTime?  @map("last_login_at") @db.Timestamptz(3)
+  passwordChangedAt DateTime?  @map("password_changed_at") @db.Timestamptz(3)
+  createdAt         DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime   @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  sessions  Session[]
+  auditLogs AuditLog[]
+
+  @@map("users")
+}
+
+model Session {
+  /// SHA-256 от токена из cookie. Сам токен в БД не хранится.
+  id        String   @id @db.VarChar(64)
+  userId    String   @map("user_id")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime @map("expires_at") @db.Timestamptz(3)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  userAgent String?  @map("user_agent") @db.VarChar(300)
+  ipHash    String?  @map("ip_hash") @db.VarChar(64)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+// ─────────────────────────── Настройки ───────────────────────────
+
+/// Единственная строка (id = 1) с настройками сайта
+model SiteSettings {
+  id                   Int      @id @default(1)
+  siteName             String   @default("DOMA RENT") @map("site_name") @db.VarChar(60)
+  logoUrl              String?  @map("logo_url") @db.VarChar(500)
+  logoStorageKey       String?  @map("logo_storage_key") @db.VarChar(300)
+  phone                String?  @db.VarChar(32)
+  email                String?  @db.VarChar(254)
+  telegramUrl          String?  @map("telegram_url") @db.VarChar(300)
+  viberUrl             String?  @map("viber_url") @db.VarChar(300)
+  whatsappUrl          String?  @map("whatsapp_url") @db.VarChar(300)
+  workingHours         String?  @map("working_hours") @db.VarChar(120)
+  defaultCity          City     @default(KYIV) @map("default_city")
+  companyDescription   String?  @map("company_description") @db.VarChar(1500)
+  /// [{ label: string, url: string }]
+  socialLinks          Json     @default("[]") @map("social_links")
+  seoTitle             String?  @map("seo_title") @db.VarChar(120)
+  seoDescription       String?  @map("seo_description") @db.VarChar(300)
+  // Юридические реквизиты — заполняет владелец сайта
+  legalCompanyName     String?  @map("legal_company_name") @db.VarChar(200)
+  legalAddress         String?  @map("legal_address") @db.VarChar(300)
+  legalEmail           String?  @map("legal_email") @db.VarChar(254)
+  legalPhone           String?  @map("legal_phone") @db.VarChar(32)
+  // Cookies и аналитика (скрипты загружаются только после согласия)
+  gaMeasurementId      String?  @map("ga_measurement_id") @db.VarChar(32)
+  metaPixelId          String?  @map("meta_pixel_id") @db.VarChar(32)
+  /// Увеличение версии заново запрашивает согласие на cookies у всех посетителей
+  cookieConsentVersion Int      @default(1) @map("cookie_consent_version")
+  // Курсы для пересчёта цен в гривны (фильтры и сортировка)
+  usdRate              Float    @default(41.5) @map("usd_rate")
+  eurRate              Float    @default(48) @map("eur_rate")
+  updatedAt            DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@map("site_settings")
+}
+
+// ─────────────────────────── Безопасность ────────────────────────
+
+/// Счётчики ограничения частоты запросов (fixed window), общие для всех инстансов
+model RateLimit {
+  key     String   @id @db.VarChar(200)
+  count   Int
+  resetAt DateTime @map("reset_at") @db.Timestamptz(3)
+
+  @@index([resetAt])
+  @@map("rate_limits")
+}
+
+/// Журнал событий безопасности и важных действий администратора
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String?  @map("user_id")
+  user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  action     String   @db.VarChar(64)
+  entityType String?  @map("entity_type") @db.VarChar(32)
+  entityId   String?  @map("entity_id") @db.VarChar(64)
+  details    String?  @db.VarChar(500)
+  ipHash     String?  @map("ip_hash") @db.VarChar(64)
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([createdAt(sort: Desc)])
+  @@index([userId])
+  @@map("audit_logs")
+}

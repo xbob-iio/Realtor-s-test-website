@@ -1,0 +1,47 @@
+# dependencies
+/node_modules
+/.pnp
+.pnp.*
+.yarn/*
+
+# next.js
+/.next/
+/out/
+/build
+next-env.d.ts
+*.tsbuildinfo
+
+# prisma generated client
+/src/generated/prisma
+
+# env files — секреты никогда не попадают в git
+.env
+.env.*
+!.env.example
+
+# local data: dev database cluster and uploaded files
+/.data/
+/storage/
+
+# testing
+/coverage
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
+/e2e/.artifacts/
+
+# logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.log
+
+# misc
+.DS_Store
+Thumbs.db
+*.pem
+.vercel
+.idea
+.vscode/*
+!.vscode/extensions.json
